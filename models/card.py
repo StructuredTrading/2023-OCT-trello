@@ -13,7 +13,7 @@ class Card(db.Model):
 
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False) # Foreign Key 'users.id' tablename = 'users', key = 'id'
 
-    user = db.relationship('Users', back_populates='cards') # Feature provided by SQLalchemy
+    user = db.relationship('User', back_populates='cards') # Feature provided by SQLalchemy
 
     # {id: 1, title: Card 1, user_id: 2}
     # {
