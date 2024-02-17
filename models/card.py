@@ -14,6 +14,7 @@ class Card(db.Model):
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False) # Foreign Key 'users.id' tablename = 'users', key = 'id'
 
     user = db.relationship('User', back_populates='cards') # Feature provided by SQLalchemy
+    comments = db.relationship("Comment", back_populates="card")
 
     # {id: 1, title: Card 1, user_id: 2}
     # {
@@ -28,9 +29,11 @@ class Card(db.Model):
 class CardSchema(ma.Schema):
 
     user = fields.Nested('UserSchema', only = ['name', 'email'])
+
+    comments = fields.List(fields.Nested("CommentSchema"))
     
     class Meta:
-        fields = ('id', 'title', 'description', 'date', 'status', 'priority', 'user')
+        fields = ('id', 'title', 'description', 'date', 'status', 'priority', 'user', 'comments')
         ordered = True
 
 card_schema = CardSchema()
