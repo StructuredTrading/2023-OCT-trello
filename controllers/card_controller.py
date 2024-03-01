@@ -1,23 +1,43 @@
 from datetime import date
+import functools
 
 from flask import Blueprint, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 
 from init import db
 from models.card import Card, cards_schema, card_schema
-from models.comment import Comment, comment_schema
-
+from models.users import User
+from controllers.comment_controller import comments_bp
 
 cards_bp = Blueprint('cards', __name__, url_prefix='/cards')
+cards_bp.register_blueprint(comments_bp)
 
-# http://localhost:8080/cards - RETRIEVE ALL
+def authorise_as_admin(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        user_id = get_jwt_identity()
+        stmt = db.select(User).filter_by(id=user_id)
+        user = db.session.scalar(stmt)
+        # if the user is an admin
+        if user.is_admin:
+            # we will continue and run the decorated function
+            return fn(*args, **kwargs)
+        # else (if the user is NOT an admin)
+        else:
+            # return an error
+            return {"error": "Not authorised to delete a card"}, 403
+        
+    return wrapper
+
+# http://localhost:8080/cards - GET
 @cards_bp.route('/')
 def get_all_cards():
     stmt = db.select(Card).order_by(Card.date.desc())
     cards = db.session.scalars(stmt)
     return cards_schema.dump(cards)
 
-# http://localhost:8080/cards/<card_id> - RETRIEVE SINGLE
+
+# http://localhost:8080/cards/4 - GET
 @cards_bp.route('/<int:card_id>')
 def get_one_card(card_id): # card_id = 4
     stmt = db.select(Card).filter_by(id=card_id) # select * from cards where id=4
@@ -28,8 +48,8 @@ def get_one_card(card_id): # card_id = 4
         return {"error": f"Card with id {card_id} not found"}, 404
     
 
-# http://localhost:8080/cards - CREATE
-@cards_bp.route("/", methods=["POST"])
+# http://localhost:8080/cards - POST
+@cards_bp.route('/', methods=["POST"])
 @jwt_required()
 def create_card():
     body_data = card_schema.load(request.get_json())
@@ -48,10 +68,15 @@ def create_card():
     # return the newly created card
     return card_schema.dump(card), 201
 
-
-# http://localhost:8080/cards/<card_id> - DELETE
-@cards_bp.route("/<int:card_id>", methods=["DELETE"])
+# https://localhost:8080/cards/6 - DELETE
+@cards_bp.route('/<int:card_id>', methods=["DELETE"])
+@jwt_required()
+@authorise_as_admin
 def delete_card(card_id):
+    # # check user's admin status
+    # is_admin = is_user_admin()
+    # if not is_admin:
+    #     return {"error": "Not authorised to delete a card"}, 403
     # get the card from the db with id = card_id
     stmt = db.select(Card).where(Card.id == card_id)
     card = db.session.scalar(stmt)
@@ -60,24 +85,26 @@ def delete_card(card_id):
         # delete the card from the session and commit
         db.session.delete(card)
         db.session.commit()
-        # return
-        return {'message': f"{card.title} delete successfully"}
+        # return msg
+        return {'message': f"Card '{card.title}' deleted successfully"}
     # else
     else:
         # return error msg
-        return {'Error': f"Card with id {card_id} not found"}, 404
+        return {'error': f"Card with id {card_id} not found"}, 404
     
-
-# http://localhost:8080/cards/<card_id> - UPDATE
-@cards_bp.route("/<int:card_id>", methods=["PUT", "PATCH"])
+# http://localhost:8080/cards/5 - PUT, PATCH
+@cards_bp.route('/<int:card_id>', methods=["PUT", "PATCH"])
+@jwt_required()
 def update_card(card_id):
-    # get the data to be updated from the body of the request
+    # Get the data to be updated from the body of the request
     body_data = card_schema.load(request.get_json(), partial=True)
-    # get the card from the db whpse fields need to be updated
-    stmt = db.select(Card).filter_by(id = card_id)
+    # get the card from the db whose fields need to be updated
+    stmt = db.select(Card).filter_by(id=card_id)
     card = db.session.scalar(stmt)
     # if card exists
     if card:
+        if str(card.user_id) != get_jwt_identity():
+            return {"error": "Only the owner can edit the card"}, 403
         # update the fields
         card.title = body_data.get('title') or card.title
         card.description = body_data.get('description') or card.description
@@ -90,57 +117,12 @@ def update_card(card_id):
     # else
     else:
         # return error msg
-        return {'Error': f"Card with id {card_id} not found"}, 404
+        return {'error': f'Card with id {card_id} not found'}, 404
     
+# This function has been replaced by the authorise_as_admin decorator
+def is_user_admin():
+    user_id = get_jwt_identity()
+    stmt = db.select(User).filter_by(id=user_id)
+    user = db.session.scalar(stmt)
+    return user.is_admin
 
-# "/cards/<int:card_id>/comments" -> GET, POST
-# "/cards/5" -> GET, POST
-
-# "cards/<int:card_id>/comments/<int:comment_id>" -> PUT, PATCH. DELETE
-# "/cards/5/comments/2" - PUT, PATCH, DELETE
-    
-@cards_bp.route("/<int:card_id>/comments", methods=["POST"])
-@jwt_required()
-def create_comment(card_id):
-    body_data = request.get_json()
-    stmt = db.select(Card).filter_by(id=card_id)
-    card = db.session.scalar(stmt)
-    if card:
-        comment = Comment(
-            message = body_data.get('message'),
-            user_id = get_jwt_identity(),
-            card = card
-        )
-        db.session.add(comment)
-        db.session.commit()
-        return comment_schema.dump(comment), 201
-    else:
-        return {'Error': f"Card with id {card_id} not found"}, 404
-
-
-@cards_bp.route("/<int:card_id>/comments/<int:comment_id>", methods=["DELETE"])
-@jwt_required()
-def delete_comment(card_id, comment_id):
-    stmt = db.select(Comment).filter_by(id=comment_id)
-    comment = db.session.scalar(stmt)
-    if comment and comment.card.id == card_id:
-        db.session.delete(comment)
-        db.session.commit()
-        return {"message": f"Comment with id {comment_id} has been deleted"}
-    else:
-        return {"error": f"Comment with id {comment_id} not found in card with id {card_id}"}, 404
-
-
-@cards_bp.route("/<int:card_id>/comments/<int:comment_id>", methods=["PUT", "PATCH"])
-@jwt_required()
-def edit_comment(card_id, comment_id):
-    body_data = request.get_json()
-    stmt = db.select(Comment).filter_by(id=comment_id, card_id=card_id) # Filter Comment by multiple parameters
-    comment = db.session.scalar(stmt)
-    if comment:
-        comment.message = body_data.get("message") or comment.message
-        db.session.add(comment)
-        db.session.commit()
-        return comment_schema.dump(comment), 201
-    else:
-        return {"Error": f"Comment with id {comment_id} not found in card with id {card_id}"}, 404
